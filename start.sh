@@ -1,2 +1,4 @@
 #!/bin/bash
-python3 mediagrabt_bot.py
+pip install -r requirements.txt
+python mediagrabt_bot.py
+
