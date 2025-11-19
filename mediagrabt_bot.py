@@ -3,15 +3,16 @@ import tempfile
 import subprocess
 from telegram import Update, InputFile, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import (
-    Application, CommandHandler, MessageHandler,
+    ApplicationBuilder, CommandHandler, MessageHandler,
     CallbackQueryHandler, ContextTypes, filters
 )
 
-# BOT TOKEN
+# --- BOT TOKEN ---
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 if not BOT_TOKEN:
-    raise RuntimeError("BOT_TOKEN topilmadi!")
+    raise RuntimeError("BOT_TOKEN topilmadi! Render Environment ichiga qo‘ying.")
 
+# Fayl limiti
 FILE_LIMIT = 45 * 1024 * 1024
 
 MSG = {
@@ -20,25 +21,29 @@ MSG = {
     "tj": {"checking": "Санҷида истодаам...", "toolarge": "Файл хеле калон аст.", "done": "Омода шуд видео ва аудио:"}
 }
 
-user_lang = {}
+user_lang = {}  # Foydalanuvchi tilini saqlaydi
 
 
-def detect_lang(text: str):
+def detect_lang(text):
     t = text.lower()
-    if any(w in t for w in ["salom", "qale", "video"]): return "uz"
-    if any(w in t for w in ["привет", "видео"]): return "ru"
-    if any(w in t for w in ["салом", "видео"]): return "tj"
+    if "salom" in t or "video" in t: return "uz"
+    if "привет" in t or "видео" in t: return "ru"
+    if "салом" in t or "видео" in t: return "tj"
     return "uz"
 
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    keyboard = [[
-        InlineKeyboardButton("🇺🇿 O‘zbekcha", callback_data="uz"),
-        InlineKeyboardButton("🇷🇺 Русский", callback_data="ru"),
-        InlineKeyboardButton("🇹🇯 Тоҷикӣ", callback_data="tj")
-    ]]
+    keyboard = [
+        [
+            InlineKeyboardButton("🇺🇿 O‘zbekcha", callback_data="uz"),
+            InlineKeyboardButton("🇷🇺 Русский", callback_data="ru"),
+            InlineKeyboardButton("🇹🇯 Тоҷикӣ", callback_data="tj")
+        ]
+    ]
     await update.message.reply_text(
-        "Assalomu alaykum!\nTilni tanlang:",
+        "Assalomu alaykum, botimizga hush kelibsiz 😊\n"
+        "Men Shohjahon tomonidan yasalgan!\n\n"
+        "Iltimos, tilni tanlang:",
         reply_markup=InlineKeyboardMarkup(keyboard)
     )
 
@@ -46,16 +51,16 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def button(update: Update, context: ContextTypes.DEFAULT_TYPE):
     q = update.callback_query
     await q.answer()
-    user_lang[q.from_user.id] = q.data
-    await q.edit_message_text(f"Til tanlandi: {q.data.upper()} ✅")
+    lang = q.data
+    user_lang[q.from_user.id] = lang
+    await q.edit_message_text(f"Til tanlandi: {lang.upper()} ✅")
 
 
-def download_video(url: str, outdir: str):
+def download_video(url, outdir):
     template = os.path.join(outdir, "%(title).80s.%(ext)s")
     cmd = ["yt-dlp", "-o", template, "-f", "best", url]
-    proc = subprocess.run(cmd, capture_output=True, text=True)
-
-    if proc.returncode != 0:
+    p = subprocess.run(cmd, capture_output=True, text=True)
+    if p.returncode != 0:
         return None
 
     files = [os.path.join(outdir, f) for f in os.listdir(outdir)]
@@ -63,14 +68,16 @@ def download_video(url: str, outdir: str):
     return files[0] if files else None
 
 
-def convert_to_audio(video_path: str, outdir: str):
-    base = os.path.splitext(os.path.basename(video_path))[0]
-    audio_path = os.path.join(outdir, f"{base}.mp3")
+def convert_to_audio(video, outdir):
+    base = os.path.splitext(os.path.basename(video))[0]
+    audio = os.path.join(outdir, f"{base}.mp3")
 
-    cmd = ["ffmpeg", "-i", video_path, "-vn", "-ab", "128k", "-ar", "44100", "-y", audio_path]
-    proc = subprocess.run(cmd, capture_output=True, text=True)
+    cmd = ["ffmpeg", "-i", video, "-vn", "-ab", "128k", "-ar", "44100", "-y", audio]
+    p = subprocess.run(cmd, capture_output=True, text=True)
+    if p.returncode != 0:
+        return None
 
-    return audio_path if proc.returncode == 0 else None
+    return audio
 
 
 async def handle(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -78,42 +85,46 @@ async def handle(update: Update, context: ContextTypes.DEFAULT_TYPE):
     lang = user_lang.get(update.message.from_user.id, detect_lang(text))
 
     if not text.startswith("http"):
-        await update.message.reply_text("Iltimos, link yuboring.")
+        await update.message.reply_text("Iltimos, to‘g‘ri link yuboring.")
         return
 
     await update.message.reply_text(MSG[lang]["checking"])
 
     with tempfile.TemporaryDirectory() as tmp:
-        video_file = download_video(text, tmp)
-        if not video_file:
+        video = download_video(text, tmp)
+        if not video:
             await update.message.reply_text("Xatolik yuz berdi.")
             return
 
-        if os.path.getsize(video_file) > FILE_LIMIT:
+        if os.path.getsize(video) > FILE_LIMIT:
             await update.message.reply_text(MSG[lang]["toolarge"])
             return
 
-        audio_file = convert_to_audio(video_file, tmp)
+        audio = convert_to_audio(video, tmp)
+        if not audio:
+            await update.message.reply_text("Audio yaratishda xatolik.")
+            return
 
         await update.message.reply_text(MSG[lang]["done"])
 
-        with open(video_file, "rb") as f:
-            await update.message.reply_document(InputFile(f))
+        with open(video, "rb") as v:
+            await update.message.reply_document(InputFile(v, filename=os.path.basename(video)))
 
-        with open(audio_file, "rb") as f:
-            await update.message.reply_document(InputFile(f))
+        with open(audio, "rb") as a:
+            await update.message.reply_document(InputFile(a, filename=os.path.basename(audio)))
 
 
 def main():
-    app = Application.builder().token(BOT_TOKEN).build()
+    print("BOT ISHGA TUSHDI...")
+    app = ApplicationBuilder().token(BOT_TOKEN).build()
 
     app.add_handler(CommandHandler("start", start))
-    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle))
     app.add_handler(CallbackQueryHandler(button))
+    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle))
 
-    print("BOT ISHGA TUSHDI")
     app.run_polling()
 
 
 if __name__ == "__main__":
     main()
+
