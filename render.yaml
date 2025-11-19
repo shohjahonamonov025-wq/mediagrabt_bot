@@ -2,5 +2,6 @@ services:
   - type: worker
     name: mediagrabt_bot
     env: python
+    pythonVersion: 3.10
     buildCommand: "pip install -r requirements.txt"
     startCommand: "python mediagrabt_bot.py"
